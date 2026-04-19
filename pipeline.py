@@ -52,7 +52,10 @@ class LeafAnalysisPipeline:
 
         grayscale_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2GRAY)
         if self.preprocess_filter is not None:
-            grayscale_image = apply_preprocessing(original_image, filter_type=self.preprocess_filter)
+            grayscale_image = apply_preprocessing(grayscale_image, filter_type=self.preprocess_filter)
+
+        if grayscale_image is None or grayscale_image.ndim != 2:
+            raise ValueError("Pipeline expects a valid grayscale image (2D array).")
 
         leaf_mask = None
         if self.segmentation_method is not None:
