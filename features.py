@@ -4,6 +4,8 @@ import cv2
 import numpy as np
 from skimage.feature import hog
 from skimage.feature import local_binary_pattern
+from sklearn.cluster import KMeans
+from sklearn.mixture import GaussianMixture
 
 
 def detect_edges(image: np.ndarray, method: str = "canny") -> np.ndarray:
@@ -116,4 +118,172 @@ def extract_hog(
     return hog_features.astype(np.float32), hog_visualization
 
 
-# Placeholder: custom descriptor and Bag of Words will be added later.
+def extract_local_descriptors(image: np.ndarray, n_keypoints: int = 500) -> np.ndarray:
+    """Extract local ORB descriptors from a grayscale image.
+
+    Input: Grayscale image and max keypoint count.
+    Output: Descriptor matrix of shape (N, 32), float32 in [0, 1].
+    Logic: Detect ORB keypoints and convert binary descriptors to float vectors.
+    """
+    orb = cv2.ORB_create(nfeatures=n_keypoints)
+    _, descriptors = orb.detectAndCompute(image, None)
+
+    if descriptors is None:
+        return np.empty((0, 32), dtype=np.float32)
+
+    return (descriptors.astype(np.float32) / 255.0).astype(np.float32)
+
+
+def _stack_descriptor_sets(descriptor_sets: list[np.ndarray]) -> np.ndarray:
+    """Stack non-empty descriptor matrices into one 2D array."""
+    non_empty_sets = [descriptors for descriptors in descriptor_sets if descriptors.size > 0]
+    if not non_empty_sets:
+        raise ValueError("No descriptors available to train codebook/model.")
+    return np.vstack(non_empty_sets).astype(np.float32)
+
+
+def train_bovw_codebook(
+    descriptor_sets: list[np.ndarray],
+    n_clusters: int = 64,
+    random_state: int = 42,
+    max_descriptors: int = 50000,
+) -> KMeans:
+    """Train a BoVW codebook using k-means++ initialization.
+
+    Input: List of descriptor arrays from images.
+    Output: Fitted scikit-learn KMeans model.
+    Logic: Stack descriptors, optionally subsample, then fit KMeans with k-means++.
+    """
+    descriptor_matrix = _stack_descriptor_sets(descriptor_sets)
+
+    if len(descriptor_matrix) > max_descriptors:
+        rng = np.random.default_rng(random_state)
+        selected_indices = rng.choice(len(descriptor_matrix), size=max_descriptors, replace=False)
+        descriptor_matrix = descriptor_matrix[selected_indices]
+
+    if len(descriptor_matrix) < n_clusters:
+        raise ValueError(
+            f"Not enough descriptors ({len(descriptor_matrix)}) for n_clusters={n_clusters}."
+        )
+
+    kmeans = KMeans(
+        n_clusters=n_clusters,
+        init="k-means++",
+        n_init=10,
+        random_state=random_state,
+    )
+    kmeans.fit(descriptor_matrix)
+    return kmeans
+
+
+def extract_bovw_features(descriptors: np.ndarray, codebook: KMeans) -> np.ndarray:
+    """Extract Bag of Visual Words histogram with hard assignments.
+
+    Input: Descriptor matrix and fitted KMeans codebook.
+    Output: L1-normalized visual word histogram (float32).
+    Logic: Assign each descriptor to closest centroid and count assignments.
+    """
+    n_clusters = int(codebook.n_clusters)
+
+    if descriptors.size == 0:
+        return np.zeros(n_clusters, dtype=np.float32)
+
+    word_ids = codebook.predict(descriptors.astype(np.float32))
+    histogram = np.bincount(word_ids, minlength=n_clusters).astype(np.float32)
+
+    histogram_sum = histogram.sum()
+    if histogram_sum > 0:
+        histogram /= histogram_sum
+
+    return histogram
+
+
+def train_fisher_gmm(
+    descriptor_sets: list[np.ndarray],
+    n_components: int = 32,
+    random_state: int = 42,
+    max_descriptors: int = 50000,
+) -> GaussianMixture:
+    """Train a diagonal-covariance GMM for Fisher vector encoding.
+
+    Input: List of descriptor arrays from images.
+    Output: Fitted GaussianMixture model.
+    Logic: Stack descriptors, optionally subsample, then fit a GMM.
+    """
+    descriptor_matrix = _stack_descriptor_sets(descriptor_sets)
+
+    if len(descriptor_matrix) > max_descriptors:
+        rng = np.random.default_rng(random_state)
+        selected_indices = rng.choice(len(descriptor_matrix), size=max_descriptors, replace=False)
+        descriptor_matrix = descriptor_matrix[selected_indices]
+
+    if len(descriptor_matrix) < n_components:
+        raise ValueError(
+            f"Not enough descriptors ({len(descriptor_matrix)}) for n_components={n_components}."
+        )
+
+    gmm = GaussianMixture(
+        n_components=n_components,
+        covariance_type="diag",
+        max_iter=200,
+        reg_covar=1e-6,
+        random_state=random_state,
+    )
+    gmm.fit(descriptor_matrix)
+    return gmm
+
+
+def extract_fisher_vector(descriptors: np.ndarray, gmm: GaussianMixture) -> np.ndarray:
+    """Extract Fisher vector using soft assignment from a fitted GMM.
+
+    Input: Descriptor matrix and fitted GaussianMixture model.
+    Output: Power- and L2-normalized Fisher vector.
+    Logic: Compute gradients wrt mixture weights, means, and variances.
+    """
+    n_components = int(gmm.weights_.shape[0])
+    descriptor_dim = int(gmm.means_.shape[1])
+    fisher_length = n_components * (1 + 2 * descriptor_dim)
+
+    if descriptors.size == 0:
+        return np.zeros(fisher_length, dtype=np.float32)
+
+    descriptors = descriptors.astype(np.float32)
+    n_descriptors = float(descriptors.shape[0])
+
+    posterior = gmm.predict_proba(descriptors)
+    weights = gmm.weights_.astype(np.float32)
+    means = gmm.means_.astype(np.float32)
+    variances = gmm.covariances_.astype(np.float32)
+    stddev = np.sqrt(variances + 1e-12)
+
+    s0 = posterior.sum(axis=0) / n_descriptors
+    s1 = posterior.T @ descriptors / n_descriptors
+    s2 = posterior.T @ (descriptors**2) / n_descriptors
+
+    grad_weights = (s0 - weights) / np.sqrt(weights + 1e-12)
+    grad_means = (s1 - s0[:, np.newaxis] * means) / (
+        np.sqrt(weights + 1e-12)[:, np.newaxis] * stddev
+    )
+    grad_variances = (
+        s2
+        - 2.0 * s1 * means
+        + s0[:, np.newaxis] * (means**2 - variances)
+    ) / (np.sqrt(2.0 * (weights + 1e-12))[:, np.newaxis] * variances)
+
+    fisher_vector = np.concatenate(
+        [
+            grad_weights.ravel(),
+            grad_means.ravel(),
+            grad_variances.ravel(),
+        ]
+    ).astype(np.float32)
+
+    fisher_vector = np.sign(fisher_vector) * np.sqrt(np.abs(fisher_vector) + 1e-12)
+    norm_value = np.linalg.norm(fisher_vector)
+    if norm_value > 0:
+        fisher_vector /= norm_value
+
+    return fisher_vector.astype(np.float32)
+
+
+# Placeholder: custom descriptor will be added later.
