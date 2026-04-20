@@ -286,4 +286,75 @@ def extract_fisher_vector(descriptors: np.ndarray, gmm: GaussianMixture) -> np.n
     return fisher_vector.astype(np.float32)
 
 
-# Placeholder: custom descriptor will be added later.
+def extract_mtcd(
+    mask: np.ndarray,
+    n_samples: int = 128,
+    scales: tuple = (1, 4, 8, 16),
+    n_fourier: int = 20,
+) -> np.ndarray:
+    """Extract Multiscale Triangular Centroid Distance descriptor.
+
+    Input: Binary mask (uint8) from segment_leaf/apply_morphology, plus tuning params.
+    Output: L2-normalized descriptor vector of shape (len(scales) * 2 * n_fourier,).
+    Logic: At each scale, compute centroid-distance and triangle-area signatures along
+           the resampled contour, then take FFT magnitudes for rotation/start invariance.
+    """
+    descriptor_length = len(scales) * 2 * n_fourier
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        return np.zeros(descriptor_length, dtype=np.float32)
+
+    contour = max(contours, key=cv2.contourArea)
+    area = cv2.contourArea(contour)
+    if area < 1.0:
+        return np.zeros(descriptor_length, dtype=np.float32)
+
+    moments = cv2.moments(contour)
+    if moments["m00"] == 0:
+        return np.zeros(descriptor_length, dtype=np.float32)
+    cx = moments["m10"] / moments["m00"]
+    cy = moments["m01"] / moments["m00"]
+
+    points = contour.reshape(-1, 2).astype(np.float64)
+    if len(points) < 4:
+        return np.zeros(descriptor_length, dtype=np.float32)
+
+    diffs = np.diff(points, axis=0)
+    arc = np.concatenate([[0.0], np.cumsum(np.sqrt((diffs ** 2).sum(axis=1)))])
+    total_arc = arc[-1]
+    if total_arc < 1e-6:
+        return np.zeros(descriptor_length, dtype=np.float32)
+
+    sample_arc = np.linspace(0.0, total_arc, n_samples, endpoint=False)
+    sampled = np.stack([
+        np.interp(sample_arc, arc, points[:, 0]),
+        np.interp(sample_arc, arc, points[:, 1]),
+    ], axis=1)
+
+    scale_factor = np.sqrt(area)
+    all_features: list[np.ndarray] = []
+
+    for s in scales:
+        d_centroid = np.sqrt((sampled[:, 0] - cx) ** 2 + (sampled[:, 1] - cy) ** 2)
+        d_centroid /= scale_factor
+
+        idx_prev = (np.arange(n_samples) - s) % n_samples
+        idx_next = (np.arange(n_samples) + s) % n_samples
+        p_prev = sampled[idx_prev]
+        p_next = sampled[idx_next]
+
+        triangle_area = 0.5 * np.abs(
+            p_prev[:, 0] * (sampled[:, 1] - p_next[:, 1])
+            + sampled[:, 0] * (p_next[:, 1] - p_prev[:, 1])
+            + p_next[:, 0] * (p_prev[:, 1] - sampled[:, 1])
+        ) / (scale_factor ** 2)
+
+        all_features.append(np.abs(np.fft.fft(d_centroid))[:n_fourier])
+        all_features.append(np.abs(np.fft.fft(triangle_area))[:n_fourier])
+
+    vector = np.concatenate(all_features).astype(np.float32)
+    norm = np.linalg.norm(vector)
+    if norm > 0:
+        vector /= norm
+    return vector
