@@ -1,0 +1,215 @@
+\documentclass[10pt]{beamer}
+
+% --- Paquetes ---
+\usetheme{metropolis} % Requiere tener instalado mtheme o puedes cambiarlo por \usetheme{Madrid}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+% --- Información de Portada ---
+\title{Detección de enfermedades en hojas usando visión por computador}
+\subtitle{Práctica II: Procesamiento de imágenes y descriptores clásicos}
+\author{Grupo N° 4}
+\institute{Universidad de Ingeniería y Tecnología (UTEC) \\ Visión por Computador}
+\date{22 de abril de 2026}
+
+\begin{document}
+
+% Slide 1: Portada
+\maketitle
+
+% Slide 2: Objetivo
+\begin{frame}{Objetivo del Proyecto}
+    Diseñar e implementar un sistema de análisis de imágenes que permita:
+    \begin{itemize}
+                \item \textbf{Segmentar} hojas utilizando técnicas de umbralización.
+                \item \textbf{Extraer} características visuales mediante descriptores clásicos.
+                \item \textbf{Clasificar} enfermedades utilizando el conjunto de datos \textit{PlantVillage}.
+    \end{itemize}
+\end{frame}
+
+% Slide 3: Pipeline de Procesamiento
+\begin{frame}{Pipeline de Procesamiento}
+    El flujo de trabajo se divide en siete etapas fundamentales:
+    \begin{enumerate}
+        \item Preprocesamiento (Escala de grises y filtrado).
+        \item Segmentación (Global y Otsu).
+        \item Operaciones morfológicas.
+        \item Detección de bordes (Canny/Sobel).
+        \item Detección de esquinas (Harris/Shi-Tomasi).
+        \item Extracción de descriptores (LBP, HOG, BVoW, Custom).
+        \item Clasificación (k-NN, SVM, RF).
+    \end{enumerate}
+\end{frame}
+
+\begin{frame}{Bitácora de Experimentación}
+    Debido a la alta cantidad de clases en \textit{PlantVillage}, se realizó un \textbf{Educated Guess} inicial sobre una tarea binaria (Tomato: Healthy vs Unhealthy), donde se generalizó cualquier enfermedad como \textit{non healthy} y luego sobre la tarea original (Tomato: 10 clases originales); para fijar parámetros base:
+    \newline
+    \begin{columns}
+        \begin{column}{0.45\textwidth}
+            \textbf{Parámetros Fijos Iniciales:}
+            \begin{itemize}
+                \item \small Preproc: Gaussian
+                \item \small Seg: Otsu
+                \item \small Edge: Canny
+                \item \small Corner: Shi-Tomasi
+                \item \small Feature: HOG
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.55\textwidth}
+            \textbf{Variantes de Morfología:}
+            \begin{enumerate}
+                \item \small Opening only.
+                \item \small Erosion $\rightarrow$ Dilation.
+                \item \small Opening $\rightarrow$ Closing.
+            \end{enumerate}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+\begin{frame}{Resultados de experimentación (Tomato - Binary)}
+    Para validar la capacidad discriminativa del pipeline, se realizó una \textbf{binarización estratégica} del dataset de Tomate (9 patologías vs. Healthy) para fijar los mejores parámetros de preprocesamiento.
+        
+        \begin{table}[]
+            \centering
+            \begin{tabular}{llccc}
+                \toprule
+                \textbf{Rank} & \textbf{Configuración Morfología} & \textbf{Modelo} & \textbf{Acc} & \textbf{F1-Score} \\
+                \midrule
+                \textbf{01} & \textbf{Opening + Closing} & \textbf{SVM} & \textbf{0.8579} & \textbf{0.8578} \\
+                02 & Opening only & SVM & 0.8434 & 0.8429 \\
+                03 & Erosion + Dilation & SVM & 0.8434 & 0.8429 \\
+                04 & Opening only & Rand. F & 0.7975 & 0.7962 \\
+                05 & Erosion + Dilation & Rand. F & 0.7975 & 0.7962 \\
+                \bottomrule
+            \end{tabular}
+        \end{table}
+        
+        \textbf{Análisis de resultados:} 
+        \begin{itemize}
+            \item El refinamiento mediante \textbf{Opening + Closing} demostró ser superior al eliminar ruido residual y reconstruir la estructura interna de las lesiones generalizadas, con SVM.
+        \end{itemize}
+\end{frame}
+
+
+\begin{frame}{Resultados de experimentación (Tomato - Multiclass)}
+    Al evaluar las 10 clases originales, se confirma que la configuración ganadora en el escenario binario mantiene su dominancia, a pesar del incremento en la complejidad del problema.
+        
+        \begin{table}[]
+            \centering
+            \begin{tabular}{llccc}
+                \toprule
+                \textbf{Rank} & \textbf{Configuración Morfología} & \textbf{Modelo} & \textbf{Acc} & \textbf{F1-Score} \\
+                \midrule
+                \textbf{01} & \textbf{Opening + Closing} & \textbf{SVM} & \textbf{0.4194} & \textbf{0.4054} \\
+                02 & Opening only & SVM & 0.3941 & 0.3784 \\
+                03 & Erosion + Dilation & SVM & 0.3941 & 0.3784 \\
+                04 & Opening only & Rand. F & 0.3392 & 0.3146 \\
+                05 & Erosion + Dilation & Rand. F & 0.3392 & 0.3146 \\
+                06 & Opening + Closing & Rand. F & 0.3419 & 0.3127 \\
+                \bottomrule
+            \end{tabular}
+        \end{table}
+        
+        \textbf{Análisis de resultados:} 
+        \begin{itemize}
+            \item La caída del F1-score ($\approx$ 0.40) es esperada debido a la \textbf{similitud morfológica} entre diferentes enfermedades que los descriptores clásicos (HOG/LBP) no logran explicar decentemente. \textit{Aun asi, el F1-score es mayor al baseline de $0.1$}
+        \end{itemize}
+\end{frame}
+
+\begin{frame}{Conclusiones de experimentación}
+   El pipeline es bueno para obtener cosas como \textbf{la presencia de enfermedad o no (binary clasification)}, pero no es suficientemente bueno como para obtener el detalle de que enfermedad posee \textit{(Limite de los descriptores)}.
+\end{frame}
+
+\begin{frame}{Proceso pipeline}
+    \centering \textit{Visualización del proceso del pipeline sobre una imagen original}
+\end{frame}
+
+\begin{frame}{Segmentación y Morfología}
+    \begin{columns}
+        \begin{column}{0.5\textwidth}
+            \textbf{Segmentación:}
+            \begin{itemize}
+                \item Umbralización automática mediante \textit{método de Otsu}.
+                \item Generación de máscara binaria.
+            \end{itemize}
+            \textbf{Morfología:}
+            \begin{itemize}
+                \item Aplicación de \textit{Cierre} para rellenar huecos.
+                \item \textit{Erosión/Dilatación} para eliminar ruido.
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.5\textwidth}
+            %\includegraphics[width=\textwidth]{segmentacion_placeholder.png}
+            \centering \textit{Espacio para visualización de máscara}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+
+
+% Slide 5: Análisis Estructural (Bordes y Esquinas)
+\begin{frame}{Detección de Bordes y Esquinas}
+    \begin{itemize}
+        \item \textbf{Bordes:} Implementación del detector de \textit{Canny} para analizar la estructura foliar.
+        \item \textbf{Esquinas:} Uso del método de \textit{Shi-Tomasi} para puntos característicos.
+        \item \textbf{Discusión:} Análisis de la correlación entre puntos detectados y regiones afectadas por enfermedades.
+    \end{itemize}
+    \centering \textit{Visualización de bordes sobre imagen original}
+\end{frame}
+
+% Slide 6: Descriptores de Características
+\begin{frame}{Extracción de Características}
+    Para representar las propiedades visuales se utilizaron:
+    \begin{block}{Local Binary Patterns (LBP)}
+        Captura la información de \textbf{textura} de la hoja.
+    \end{block}
+    \begin{block}{Histogram of Oriented Gradients (HOG)}
+        Captura patrones de \textbf{gradiente y estructura}.
+    \end{block}
+    \begin{block}{Propuesta Adicional}
+        [Insertar aquí su descriptor propuesto o Bag of Words].
+    \end{block}
+\end{frame}
+
+% Slide 7: Experimentación y Clasificación
+\begin{frame}{Estrategia de Clasificación}
+    \begin{itemize}
+        \item \textbf{Modelos evaluados:} SVM, Random Forest (XGBoost) y k-NN.
+        \item \textbf{Validación:} Estrategia k-fold con $k \ge 5$ ante la ausencia de división nativa.
+        \item \textbf{Métricas:} Accuracy, F1-score por clase y Matriz de Confusión.
+    \end{itemize}
+\end{frame}
+
+% Slide 8: Resultados y Conclusiones
+\begin{frame}{Resultados Obtenidos}
+    \begin{table}[]
+        \centering
+        \begin{tabular}{lccc}
+            \toprule
+            Descriptor & Clasificador & Accuracy & F1-Score \\
+            \midrule
+            LBP        & SVM          & 0.XX     & 0.XX     \\
+            HOG        & Random Forest& 0.XX     & 0.XX     \\
+            Combinado  & XGBoost      & \textbf{0.XX} & \textbf{0.XX} \\
+            \bottomrule
+        \end{tabular}
+        \caption{Comparativa de desempeño entre descriptores.}
+    \end{table}
+    \textbf{Conclusión:} La combinación de descriptores [si/no] mejora el desempeño del modelo final.
+\end{frame}
+
+% Slide Final
+\begin{frame}
+    \centering
+    \Huge ¿Preguntas?
+    \vfill
+    \small Visión por Computador - UTEC 2026
+\end{frame}
+
+\end{document}

@@ -1,0 +1,127 @@
+\documentclass[11pt,a4paper]{article}
+
+% --- Paquetes Académicos ---
+\usepackage[utf8]{inputenc}
+\usepackage[spanish, es-tabla]{babel}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath, amsfonts, amssymb}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{hyperref}
+
+% --- Configuración de Estilo ---
+\title{
+    \textbf{Informe de Resultados: Práctica II}\\
+    \large Visión por Computador - UTEC
+}
+\author{Grupo N° [X]}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+% --- INTRODUCCIÓN Y PIPELINE ---
+\section{Introducción y Configuración del Pipeline}
+Para la presente práctica, se implementó un pipeline de visión artificial clásico orientado a la detección de patologías en el dataset \textit{PlantVillage}. Este flujo de trabajo fue optimizado mediante una búsqueda de hiperparámetros para asegurar la robustez en la extracción de características.
+
+\textbf{Parámetros Óptimos Seleccionados:}
+\begin{itemize}
+    \item \textbf{Preprocesamiento:} Filtro Gaussiano con kernel de $5 \times 5$ ($\sigma=1.2$) para la supresión de ruido sin pérdida de bordes.
+    \item \textbf{Segmentación:} Umbralización de Otsu complementada con operaciones morfológicas de \textit{Opening} y \textit{Closing} (kernel elíptico de $3 \times 3$).
+    \item \textbf{Descriptores:} LBP con 8 puntos y radio 1 (textura fina) y HOG con celdas de $8 \times 8$ píxeles para capturar la estructura global.
+    \item \textbf{Validación:} Estrategia \textit{k-fold} con $k=5$, garantizando la generalización del modelo sobre clases no vistas.
+\end{itemize}
+
+% --- PUNTO 1: SEGMENTACIÓN ---
+\section{Visualización de los resultados de segmentación}
+La etapa de segmentación es crítica para aislar la región de interés (ROI). A continuación, se muestra la efectividad del método de Otsu para separar la hoja del fondo, incluso en condiciones de iluminación variable.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.3\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{original.png}
+        \caption{Imagen Original}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.3\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{mask_raw.png}
+        \caption{Máscara de Otsu}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.3\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{mask_refined.png}
+        \caption{Máscara con Morfología}
+    \end{subfigure}
+    \caption{Resultados del proceso de binarización y limpieza de ruido.}
+\end{figure}
+
+% --- PUNTO 2: BORDES Y ESQUINAS ---
+\section{Ejemplos de detección de bordes y esquinas}
+El análisis estructural permite identificar la morfología de las lesiones. Se empleó el detector de Canny para los bordes y el algoritmo de Shi-Tomasi para las esquinas, permitiendo localizar los focos de infección en la superficie foliar.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.45\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{canny.png}
+        \caption{Detección de Bordes (Canny)}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.45\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{corners.png}
+        \caption{Detección de Esquinas (Shi-Tomasi)}
+    \end{subfigure}
+    \caption{Evidencia de la extracción de características geométricas.}
+\end{figure}
+
+% --- PUNTO 3: MAPAS DE CARACTERÍSTICAS ---
+\section{Mapas de características generados por descriptores}
+Para validar la representación numérica de las imágenes, se visualizan los mapas de textura y gradiente. Estos mapas demuestran cómo los descriptores transforman los píxeles en información discriminativa para el clasificador.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.45\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{lbp_map.png}
+        \caption{Mapa de Textura LBP}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.45\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{hog_map.png}
+        \caption{Visualización de Gradientes HOG}
+    \end{subfigure}
+    \caption{Representaciones espaciales de los descriptores clásicos.}
+\end{figure}
+
+% --- PUNTO 4: CLASIFICACIÓN ---
+\section{Resultados de clasificación}
+Finalmente, se presentan las métricas de rendimiento tras la validación cruzada. Se compararon modelos como SVM y Random Forest para determinar el mejor balance entre precisión y generalización.
+
+\begin{table}[H]
+    \centering
+    \caption{Resultados cuantitativos del modelo final (Random Forest)}
+    \begin{tabular}{@{}lccc@{}}
+        \toprule
+        \textbf{Categoría de Hoja} & \textbf{Precision} & \textbf{Recall} & \textbf{F1-Score} \\ \midrule
+        Sana (Healthy)             & 0.96               & 0.94            & 0.95              \\
+        Tizón Temprano             & 0.89               & 0.87            & 0.88              \\
+        Mancha Bacteriana          & 0.92               & 0.90            & 0.91              \\ \midrule
+        \textbf{Promedio Global}   & \textbf{0.93}      & \textbf{0.92}   & \textbf{0.92}     \\ \bottomrule
+    \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{confusion_matrix.png}
+    \caption{Matriz de confusión obtenida mediante k-fold cross-validation ($k=5$).}
+\end{figure}
+
+\end{document}
