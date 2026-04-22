@@ -24,3 +24,7 @@ PlantVillage/*
 
 CLAUDE.md
 
+cache/
+cache/*.pkl
+.atl/
+
