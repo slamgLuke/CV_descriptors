@@ -13,9 +13,9 @@ from features import detect_edges
 from features import extract_bovw_features
 from features import extract_fisher_vector
 from features import extract_hog
+from features import extract_hsv_lbp
 from features import extract_lbp
 from features import extract_local_descriptors
-from features import extract_mtcd
 from features import train_bovw_codebook
 from features import train_fisher_gmm
 from processing import apply_morphology
@@ -40,7 +40,7 @@ class LeafAnalysisPipeline:
         """Initialize pipeline configuration.
 
         descriptor: which feature vector to produce — 'lbp_hog' (default), 'lbp', 'hog',
-                    'bovw', 'fisher', 'mtcd', or '+'-joined combos like 'hog+mtcd'.
+                    'bovw', 'fisher', 'hsv_lbp', or '+'-joined combos like 'hog+hsv_lbp'.
         apply_mask_to_features: if True, zero-out background before extracting features.
         morphology_operations: ordered list of operations (e.g. ['opening', 'closing']).
                                Takes precedence over morphology_operation when set.
@@ -62,11 +62,12 @@ class LeafAnalysisPipeline:
 
     def _preprocess_image(
         self, image_path: str
-    ) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
+    ) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray, np.ndarray]:
         """Load image, apply preprocessing/segmentation/morphology.
 
-        Returns (grayscale_image, working_mask, feature_image).
+        Returns (grayscale_image, working_mask, feature_image, feature_image_bgr).
         feature_image is grayscale with background zeroed when apply_mask_to_features=True.
+        feature_image_bgr is the BGR equivalent (needed for color-aware descriptors like hsv_lbp).
         """
         original = cv2.imread(image_path)
         if original is None:
@@ -96,10 +97,19 @@ class LeafAnalysisPipeline:
         if self.apply_mask_to_features and working_mask is not None:
             feature_image[working_mask == 0] = 0
 
-        return gray, working_mask, feature_image
+        feature_image_bgr = original.copy()
+        if self.preprocess_filter is not None:
+            feature_image_bgr = apply_preprocessing(feature_image_bgr, filter_type=self.preprocess_filter)
+        if self.apply_mask_to_features and working_mask is not None:
+            feature_image_bgr[working_mask == 0] = 0
+
+        return gray, working_mask, feature_image, feature_image_bgr
 
     def _compute_feature_vector(
-        self, feature_image: np.ndarray, working_mask: Optional[np.ndarray]
+        self,
+        feature_image: np.ndarray,
+        working_mask: Optional[np.ndarray],
+        feature_image_bgr: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Build the feature vector according to self.descriptor."""
         parts = [d.strip() for d in self.descriptor.split("+")]
@@ -125,14 +135,14 @@ class LeafAnalysisPipeline:
                     raise RuntimeError("Call fit() before using descriptor='fisher'.")
                 descs = extract_local_descriptors(feature_image)
                 vectors.append(extract_fisher_vector(descs, self._gmm))
-            elif part == "mtcd":
-                if working_mask is None:
-                    raise ValueError("descriptor='mtcd' requires segmentation_method to be set.")
-                vectors.append(extract_mtcd(working_mask))
+            elif part == "hsv_lbp":
+                if feature_image_bgr is None:
+                    raise RuntimeError("feature_image_bgr is required for descriptor='hsv_lbp'.")
+                vectors.append(extract_hsv_lbp(feature_image_bgr))
             else:
                 raise ValueError(
                     f"Unknown descriptor '{part}'. "
-                    "Valid values: lbp, hog, lbp_hog, bovw, fisher, mtcd."
+                    "Valid values: lbp, hog, lbp_hog, bovw, fisher, hsv_lbp."
                 )
 
         return np.concatenate(vectors).astype(np.float32)
@@ -144,7 +154,7 @@ class LeafAnalysisPipeline:
     def fit(self, image_paths: List[str]) -> "LeafAnalysisPipeline":
         """Train the encoding model for descriptors that require it (bovw, fisher).
 
-        No-op for lbp, hog, lbp_hog, and mtcd descriptors.
+        No-op for lbp, hog, lbp_hog, and hsv_lbp descriptors.
         """
         parts = {d.strip() for d in self.descriptor.split("+")}
         needs_fit = {"bovw", "fisher"} & parts
@@ -154,7 +164,7 @@ class LeafAnalysisPipeline:
         descriptor_sets: list[np.ndarray] = []
         for path in image_paths:
             try:
-                _, _, feature_image = self._preprocess_image(path)
+                _, _, feature_image, _ = self._preprocess_image(path)
                 descs = extract_local_descriptors(feature_image)
                 descriptor_sets.append(descs)
             except (FileNotFoundError, ValueError):
@@ -169,8 +179,8 @@ class LeafAnalysisPipeline:
 
     def transform(self, image_path: str) -> np.ndarray:
         """Return only the feature vector for an image (no intermediate results dict)."""
-        _, working_mask, feature_image = self._preprocess_image(image_path)
-        return self._compute_feature_vector(feature_image, working_mask)
+        _, working_mask, feature_image, feature_image_bgr = self._preprocess_image(image_path)
+        return self._compute_feature_vector(feature_image, working_mask, feature_image_bgr)
 
     def run_full_extractor(self, image_path: str) -> Dict[str, Any]:
         """Run the full pipeline on a single image path.
@@ -218,9 +228,15 @@ class LeafAnalysisPipeline:
         if self.apply_mask_to_features and working_mask is not None:
             feature_image[working_mask == 0] = 0
 
+        feature_image_bgr = original.copy()
+        if self.preprocess_filter is not None:
+            feature_image_bgr = apply_preprocessing(feature_image_bgr, filter_type=self.preprocess_filter)
+        if self.apply_mask_to_features and working_mask is not None:
+            feature_image_bgr[working_mask == 0] = 0
+
         lbp_features = extract_lbp(feature_image)
         hog_features, hog_visualization = extract_hog(feature_image)
-        final_feature_vector = self._compute_feature_vector(feature_image, working_mask)
+        final_feature_vector = self._compute_feature_vector(feature_image, working_mask, feature_image_bgr)
 
         return {
             "original": original,
