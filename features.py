@@ -91,6 +91,38 @@ def extract_lbp(
     return histogram
 
 
+def extract_hsv_lbp(
+    image_bgr: np.ndarray,
+    radius: int = 1,
+    num_points: int = 8,
+    method: str = "uniform",
+) -> np.ndarray:
+    """Extract HSV-LBP: LBP histograms on each HSV channel, concatenated.
+
+    Input: BGR image (uint8, 3-channel) and LBP parameters.
+    Output: Concatenated L1-normalized histograms of shape (3 * (num_points+2),), float32.
+    Logic: Convert BGR -> HSV, compute fixed-bin LBP histogram per channel (H, S, V), concat.
+
+    Uses fixed n_bins = num_points + 2 (uniform LBP labels: 0..num_points + 1 non-uniform bin)
+    so output dim is always constant regardless of image content.
+    """
+    if image_bgr.ndim != 3 or image_bgr.shape[2] != 3:
+        raise ValueError("extract_hsv_lbp expects a 3-channel BGR image.")
+
+    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    n_bins = num_points + 2
+    histograms = []
+    for ch in range(3):
+        lbp_image = local_binary_pattern(hsv[:, :, ch], num_points, radius, method=method)
+        hist, _ = np.histogram(lbp_image.ravel(), bins=n_bins, range=(0, n_bins))
+        hist = hist.astype(np.float32)
+        total = hist.sum()
+        if total > 0:
+            hist /= total
+        histograms.append(hist)
+    return np.concatenate(histograms).astype(np.float32)
+
+
 def extract_hog(
     image: np.ndarray,
     orientations: int = 9,
@@ -284,77 +316,3 @@ def extract_fisher_vector(descriptors: np.ndarray, gmm: GaussianMixture) -> np.n
         fisher_vector /= norm_value
 
     return fisher_vector.astype(np.float32)
-
-
-def extract_mtcd(
-    mask: np.ndarray,
-    n_samples: int = 128,
-    scales: tuple = (1, 4, 8, 16),
-    n_fourier: int = 20,
-) -> np.ndarray:
-    """Extract Multiscale Triangular Centroid Distance descriptor.
-
-    Input: Binary mask (uint8) from segment_leaf/apply_morphology, plus tuning params.
-    Output: L2-normalized descriptor vector of shape (len(scales) * 2 * n_fourier,).
-    Logic: At each scale, compute centroid-distance and triangle-area signatures along
-           the resampled contour, then take FFT magnitudes for rotation/start invariance.
-    """
-    descriptor_length = len(scales) * 2 * n_fourier
-
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    if not contours:
-        return np.zeros(descriptor_length, dtype=np.float32)
-
-    contour = max(contours, key=cv2.contourArea)
-    area = cv2.contourArea(contour)
-    if area < 1.0:
-        return np.zeros(descriptor_length, dtype=np.float32)
-
-    moments = cv2.moments(contour)
-    if moments["m00"] == 0:
-        return np.zeros(descriptor_length, dtype=np.float32)
-    cx = moments["m10"] / moments["m00"]
-    cy = moments["m01"] / moments["m00"]
-
-    points = contour.reshape(-1, 2).astype(np.float64)
-    if len(points) < 4:
-        return np.zeros(descriptor_length, dtype=np.float32)
-
-    diffs = np.diff(points, axis=0)
-    arc = np.concatenate([[0.0], np.cumsum(np.sqrt((diffs ** 2).sum(axis=1)))])
-    total_arc = arc[-1]
-    if total_arc < 1e-6:
-        return np.zeros(descriptor_length, dtype=np.float32)
-
-    sample_arc = np.linspace(0.0, total_arc, n_samples, endpoint=False)
-    sampled = np.stack([
-        np.interp(sample_arc, arc, points[:, 0]),
-        np.interp(sample_arc, arc, points[:, 1]),
-    ], axis=1)
-
-    scale_factor = np.sqrt(area)
-    all_features: list[np.ndarray] = []
-
-    for s in scales:
-        d_centroid = np.sqrt((sampled[:, 0] - cx) ** 2 + (sampled[:, 1] - cy) ** 2)
-        d_centroid /= scale_factor
-
-        idx_prev = (np.arange(n_samples) - s) % n_samples
-        idx_next = (np.arange(n_samples) + s) % n_samples
-        p_prev = sampled[idx_prev]
-        p_next = sampled[idx_next]
-
-        triangle_area = 0.5 * np.abs(
-            p_prev[:, 0] * (sampled[:, 1] - p_next[:, 1])
-            + sampled[:, 0] * (p_next[:, 1] - p_prev[:, 1])
-            + p_next[:, 0] * (p_prev[:, 1] - sampled[:, 1])
-        ) / (scale_factor ** 2)
-
-        all_features.append(np.abs(np.fft.fft(d_centroid))[:n_fourier])
-        all_features.append(np.abs(np.fft.fft(triangle_area))[:n_fourier])
-
-    vector = np.concatenate(all_features).astype(np.float32)
-    norm = np.linalg.norm(vector)
-    if norm > 0:
-        vector /= norm
-    return vector

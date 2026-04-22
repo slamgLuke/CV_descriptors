@@ -88,20 +88,6 @@ def test_descriptor_invalid_raises(image_file):
         pipe.run_full_extractor(image_file)
 
 
-# --- mtcd ---
-
-def test_descriptor_mtcd_requires_segmentation(image_file):
-    pipe = LeafAnalysisPipeline(descriptor="mtcd")
-    with pytest.raises(ValueError, match="segmentation_method"):
-        pipe.run_full_extractor(image_file)
-
-
-def test_descriptor_mtcd_with_segmentation(image_file):
-    pipe = LeafAnalysisPipeline(descriptor="mtcd", segmentation_method="otsu")
-    result = pipe.run_full_extractor(image_file)
-    assert result["feature_vector"].shape == (160,)
-
-
 # --- apply_mask_to_features ---
 
 def test_apply_mask_changes_feature_vector(image_file):
@@ -179,6 +165,22 @@ def test_transform_matches_run_full_extractor(image_file):
     vec_transform = pipe.transform(image_file)
     vec_full = pipe.run_full_extractor(image_file)["feature_vector"]
     np.testing.assert_array_equal(vec_transform, vec_full)
+
+
+# --- hsv_lbp descriptor ---
+
+def test_descriptor_hsv_lbp_vector_shape(image_file):
+    pipe = LeafAnalysisPipeline(descriptor="hsv_lbp")
+    vec = pipe.run_full_extractor(image_file)["feature_vector"]
+    assert vec.shape[0] == 30
+    assert vec.dtype == np.float32
+
+
+def test_descriptor_hsv_lbp_plus_hog(image_file):
+    v_combo = LeafAnalysisPipeline(descriptor="hsv_lbp+hog").transform(image_file)
+    v_hsv = LeafAnalysisPipeline(descriptor="hsv_lbp").transform(image_file)
+    v_hog = LeafAnalysisPipeline(descriptor="hog").transform(image_file)
+    assert len(v_combo) == len(v_hsv) + len(v_hog)
 
 
 # --- error cases ---

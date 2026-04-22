@@ -11,9 +11,9 @@ from features import (
     extract_bovw_features,
     extract_fisher_vector,
     extract_hog,
+    extract_hsv_lbp,
     extract_lbp,
     extract_local_descriptors,
-    extract_mtcd,
     train_bovw_codebook,
     train_fisher_gmm,
 )
@@ -71,6 +71,29 @@ def test_lbp_normalized(gray_image):
 def test_lbp_non_negative(gray_image):
     hist = extract_lbp(gray_image)
     assert (hist >= 0).all()
+
+
+# --- extract_hsv_lbp ---
+
+def test_hsv_lbp_output_shape(leaf_image_bgr):
+    vec = extract_hsv_lbp(leaf_image_bgr)
+    assert vec.ndim == 1
+    assert vec.shape[0] == 30  # 3 channels × 10 uniform bins (P=8)
+
+
+def test_hsv_lbp_output_dtype(leaf_image_bgr):
+    assert extract_hsv_lbp(leaf_image_bgr).dtype == np.float32
+
+
+def test_hsv_lbp_per_channel_normalized(leaf_image_bgr):
+    vec = extract_hsv_lbp(leaf_image_bgr)
+    for i in range(3):
+        assert abs(vec[i * 10 : (i + 1) * 10].sum() - 1.0) < 1e-4
+
+
+def test_hsv_lbp_rejects_grayscale(gray_image):
+    with pytest.raises(ValueError, match="3-channel BGR"):
+        extract_hsv_lbp(gray_image)
 
 
 # --- extract_hog ---
@@ -186,40 +209,3 @@ def test_fisher_vector_empty_descriptors_zeros(descriptor_sets):
     assert vec.shape == (expected_length,)
 
 
-# --- extract_mtcd ---
-
-def test_mtcd_output_shape(leaf_mask):
-    vec = extract_mtcd(leaf_mask)
-    assert vec.shape == (160,)
-
-
-def test_mtcd_l2_normalized(leaf_mask):
-    vec = extract_mtcd(leaf_mask)
-    assert abs(np.linalg.norm(vec) - 1.0) < 1e-5
-
-
-def test_mtcd_float32(leaf_mask):
-    vec = extract_mtcd(leaf_mask)
-    assert vec.dtype == np.float32
-
-
-def test_mtcd_empty_mask_zeros():
-    empty = np.zeros((200, 200), dtype=np.uint8)
-    vec = extract_mtcd(empty)
-    assert (vec == 0).all()
-
-
-def test_mtcd_custom_params(leaf_mask):
-    vec = extract_mtcd(leaf_mask, n_samples=64, scales=(1, 2), n_fourier=10)
-    assert vec.shape == (2 * 2 * 10,)
-
-
-def test_mtcd_scale_invariance(leaf_mask):
-    import cv2 as _cv2
-    big_mask = np.zeros((400, 400), dtype=np.uint8)
-    _cv2.circle(big_mask, (200, 200), 140, 255, -1)
-    v_small = extract_mtcd(leaf_mask)
-    v_big = extract_mtcd(big_mask)
-    # Both normalized → cosine similarity should be high for same shape
-    cosine = float(np.dot(v_small, v_big))
-    assert cosine > 0.8

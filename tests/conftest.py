@@ -32,6 +32,12 @@ def leaf_mask() -> np.ndarray:
 
 
 @pytest.fixture
+def leaf_image_bgr(leaf_image) -> np.ndarray:
+    """200×200 synthetic leaf as a 3-channel BGR image."""
+    return cv2.cvtColor(leaf_image, cv2.COLOR_GRAY2BGR)
+
+
+@pytest.fixture
 def image_file(tmp_path, leaf_image) -> str:
     """Save leaf_image as a BGR JPEG and return its path."""
     bgr = cv2.cvtColor(leaf_image, cv2.COLOR_GRAY2BGR)
